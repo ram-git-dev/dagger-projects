@@ -1,7 +1,12 @@
 # Multi-Service Build Pipeline with Dagger
 
-## What It Does
-This project automatically builds only the Go services that have changed compared to `origin/main`. It uses Dagger to run builds inside containers, ensuring clean, consistent environments.
+## What is Dagger and Why It Matters
+
+[Dagger](https://dagger.io/) is a modern tool for building pipelines inside lightweight, portable containers. It lets us define and run builds in a clean, consistent environment every time — no more "works on my machine" problems. By using Dagger, this project builds only the services that actually changed, saving time and resources.
+
+## What This Project Does
+
+Automatically detects which Go services have changed compared to `origin/main`, then builds only those services inside containerized Go environments using Dagger. Built binaries are exported locally for use or deployment.
 
 ## Setup
 1. Install Go (v1.20+)
