@@ -4,6 +4,8 @@ import (
     "context"
     "fmt"
     "os"
+    "os/exec"
+    "strings"
 
     "dagger.io/dagger"
 )
@@ -19,33 +21,76 @@ func main() {
 
     fmt.Println("✅ Dagger pipeline running...")
 
-    // Build service-a
-    serviceABin := buildService(ctx, client, "service-a")
-    fmt.Println("✅ service-a built and exported to ./service-a-built")
-
-    // Build service-b
-    serviceBBin := buildService(ctx, client, "service-b")
-    fmt.Println("✅ service-b built and exported to ./service-b-built")
-
-    // Export built binaries locally
-    _, err = serviceABin.Export(ctx, "./service-a-built")
+    changedServices, err := getChangedServices()
     if err != nil {
         panic(err)
     }
-    _, err = serviceBBin.Export(ctx, "./service-b-built")
-    if err != nil {
-        panic(err)
+
+    if len(changedServices) == 0 {
+        fmt.Println("No changed services detected — nothing to build.")
+        return
+    }
+
+    for _, service := range changedServices {
+        fmt.Println("🔨 Building service:", service)
+
+        serviceBin := buildService(ctx, client, service)
+
+        outputPath := fmt.Sprintf("./%s-built", service)
+
+        _, err := serviceBin.Export(ctx, outputPath)
+        if err != nil {
+            panic(fmt.Sprintf("Failed to export %s binary: %v", service, err))
+        }
+
+        fmt.Printf("✅ %s built and exported to %s\n", service, outputPath)
     }
 }
 
-// buildService builds the given service folder and returns the output File
 func buildService(ctx context.Context, client *dagger.Client, serviceName string) *dagger.File {
-    output := client.Container().
+    return client.Container().
         From("golang:1.20").
-        WithMountedDirectory("/src", client.Host().Directory("./services/" + serviceName)).
+        WithMountedDirectory("/src", client.Host().Directory("../services/" + serviceName)).
         WithWorkdir("/src").
         WithExec([]string{"go", "build", "-o", "app"}).
         File("app")
+}
 
-    return output
+// getChangedServices uses `git diff` to find which services have changed
+func getChangedServices() ([]string, error) {
+    // Run git diff to compare current branch with origin/main, list only filenames changed
+    cmd := exec.Command("git", "diff", "--name-only", "origin/main...")
+
+    // Capture the output of the git command
+    out, err := cmd.Output()
+    if err != nil {
+        return nil, err // Return error if git command fails
+    }
+
+    // Split output string by newline to get a list of changed files
+    files := strings.Split(string(out), "\n")
+
+    // Create a map to store unique service names found from changed files
+    serviceSet := map[string]bool{}
+
+    // Iterate over each changed file path
+    for _, file := range files {
+        // Check if file path starts with "services/", meaning it belongs to a service
+        if strings.HasPrefix(file, "services/") {
+            // Split the file path by '/' to isolate parts
+            parts := strings.Split(file, "/")
+            // If valid path with service name (second part), add to map
+            if len(parts) >= 2 {
+                serviceSet[parts[1]] = true
+            }
+        }
+    }
+
+    // Convert the keys of the map into a slice of service names to return
+    services := []string{}
+    for svc := range serviceSet {
+        services = append(services, svc)
+    }
+
+    return services, nil // Return list of changed services, no error
 }
