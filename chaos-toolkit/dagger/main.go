@@ -132,38 +132,57 @@ func (m *ChaosToolkit) preflightChecks(
 }
 
 // kubectlContainer returns a container built via the Dagger client.
-// It mounts the entire kubeconfig directory and ensures /root/.kube/config
-// is a regular file by copying the first file found inside the mounted dir.
+// It mounts the kubeconfig directory and ensures /root/.kube/config is a regular file
+// by copying the first regular file found from common locations.
 func (m *ChaosToolkit) kubectlContainer(ctx context.Context, kubeconfigDir *dagger.Directory) (*dagger.Container, error) {
     client := dagger.Connect()
 
     ctr := client.Container().
         From("alpine:latest").
-        WithExec([]string{"apk", "add", "--no-cache", "curl", "bash"}).
-        // mount the provided kubeconfig directory at /root/.kube
+        WithExec([]string{"apk", "add", "--no-cache", "curl", "bash", "findutils"}).
         WithDirectory("/root/.kube", kubeconfigDir).
-        // install kubectl
         WithExec([]string{
             "sh", "-c",
-            "curl -LO https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl && chmod +x ./kubectl && mv ./kubectl /usr/local/bin/kubectl",
-        }).
-        // ensure a real file exists at /root/.kube/config: if it's already a file, do nothing;
-        // otherwise find the first regular file under /root/.kube and copy it to /root/.kube/config.
-        WithExec([]string{
-            "sh", "-c",
-            `if [ -f /root/.kube/config ]; then
+            `set -e
+# If /root/.kube/config is already a regular file, ensure perms and exit
+if [ -f /root/.kube/config ]; then
   chmod 600 /root/.kube/config
-else
-  f=$(find /root/.kube -type f -maxdepth 2 | head -n 1) || true
+  exit 0
+fi
+
+# If /root/.kube/config is a directory, try to find a file inside it
+if [ -d /root/.kube/config ]; then
+  f=$(find /root/.kube/config -type f -maxdepth 4 | head -n 1 || true)
   if [ -n "$f" ]; then
     cp "$f" /root/.kube/config
     chmod 600 /root/.kube/config
-  else
-    echo "no kubeconfig file found in /root/.kube" >&2
-    exit 2
+    exit 0
   fi
-fi`,
-        }).
+fi
+
+# Otherwise, search for any kubeconfig-like file inside /root/.kube
+# common names: config, kubeconfig, config.yaml, kube-config
+f=$(find /root/.kube -type f -iname 'config*' -o -iname '*kube*' | head -n 1 || true)
+if [ -n "$f" ]; then
+  cp "$f" /root/.kube/config
+  chmod 600 /root/.kube/config
+  exit 0
+fi
+
+# As a last resort, pick the first regular file anywhere under /root/.kube
+f=$(find /root/.kube -type f | head -n 1 || true)
+if [ -n "$f" ]; then
+  cp "$f" /root/.kube/config
+  chmod 600 /root/.kube/config
+  exit 0
+fi
+
+echo "no kubeconfig file found in /root/.kube; mounted contents:" >&2
+ls -la /root/.kube >&2
+exit 2
+`},
+        ).
+        WithExec([]string{"sh", "-c", "curl -LO https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl && chmod +x ./kubectl && mv ./kubectl /usr/local/bin/kubectl"}).
         WithEnvVariable("KUBECONFIG", "/root/.kube/config")
 
     return ctr, nil
