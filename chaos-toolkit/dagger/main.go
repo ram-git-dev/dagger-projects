@@ -5,7 +5,6 @@ import (
   "fmt"
   "log"
   "os"
-  "strings"
 )
 
 func main() {
@@ -22,11 +21,6 @@ func main() {
 
     fmt.Printf("Starting Chaos Test:\nNamespace: %s\nDeployment: %s\nChaos Type: %s\nDuration: %ss\nLoad Test: %s, VUs: %s\nCleanup: %s\n",
         namespace, deployment, chaosType, chaosDuration, loadTestDuration, loadTestVUs, cleanup)
-
-    // ---- Serve generated Dagger module ----
-    if err := generatedMain(ctx); err != nil {
-        log.Fatal("generatedMain failed:", err)
-    }
 
     // If you still want this process to run the orchestration as a client,
     // move the client-orchestration code into a separate command or binary.
