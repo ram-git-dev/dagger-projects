@@ -128,8 +128,7 @@ func (m *ChaosToolkit) preflightChecks(
 
 // kubectlContainer returns a container built via the Dagger client.
 // It mounts the kubeconfig directory and ensures /root/.kube/config is a regular file
-// by copying the first regular file found from common locations. The shell block
-// below guards against copying directories.
+// by removing a config directory (if present) and copying the first regular file found.
 func (m *ChaosToolkit) kubectlContainer(ctx context.Context, kubeconfigDir *dagger.Directory) (*dagger.Container, error) {
     client := dagger.Connect()
 
@@ -146,10 +145,11 @@ if [ -f /root/.kube/config ]; then
   exit 0
 fi
 
-# If /root/.kube/config is a directory, try to find a regular file inside it
+# If /root/.kube/config is a directory, try to find a regular file inside it and replace the directory
 if [ -d /root/.kube/config ]; then
   f=$(find /root/.kube/config -type f -maxdepth 4 2>/dev/null | head -n 1 || true)
   if [ -n "$f" ] && [ -f "$f" ]; then
+    rm -rf /root/.kube/config
     cp "$f" /root/.kube/config
     chmod 600 /root/.kube/config
     exit 0
@@ -159,6 +159,8 @@ fi
 # Otherwise, search for any kubeconfig-like regular file inside /root/.kube
 f=$(find /root/.kube -type f \( -iname 'config*' -o -iname '*kube*' \) 2>/dev/null | head -n 1 || true)
 if [ -n "$f" ] && [ -f "$f" ]; then
+  # if there's a directory at /root/.kube/config, remove it first
+  if [ -d /root/.kube/config ]; then rm -rf /root/.kube/config; fi
   cp "$f" /root/.kube/config
   chmod 600 /root/.kube/config
   exit 0
@@ -167,6 +169,7 @@ fi
 # As a last resort, pick the first regular file anywhere under /root/.kube
 f=$(find /root/.kube -type f 2>/dev/null | head -n 1 || true)
 if [ -n "$f" ] && [ -f "$f" ]; then
+  if [ -d /root/.kube/config ]; then rm -rf /root/.kube/config; fi
   cp "$f" /root/.kube/config
   chmod 600 /root/.kube/config
   exit 0
