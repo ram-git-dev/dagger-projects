@@ -16,12 +16,7 @@ func (m *ChaosToolkit) Hello(ctx context.Context) string {
 }
 
 // ChaosTest runs a complete chaos engineering test
-// Parameter names become CLI flags (kebab-case). Add defaults so flags are optional in the workflow.
-//
-// - chaosType default matches your workflow choice list
-// - chaosDuration default "60"
-// - loadTestDuration default "5m"
-// - loadTestVus default "10"
+// Parameter names become CLI flags (kebab-case).
 func (m *ChaosToolkit) ChaosTest(
     ctx context.Context,
     namespace string,
@@ -133,7 +128,8 @@ func (m *ChaosToolkit) preflightChecks(
 
 // kubectlContainer returns a container built via the Dagger client.
 // It mounts the kubeconfig directory and ensures /root/.kube/config is a regular file
-// by copying the first regular file found from common locations.
+// by copying the first regular file found from common locations. The shell block
+// below guards against copying directories.
 func (m *ChaosToolkit) kubectlContainer(ctx context.Context, kubeconfigDir *dagger.Directory) (*dagger.Container, error) {
     client := dagger.Connect()
 
@@ -150,28 +146,27 @@ if [ -f /root/.kube/config ]; then
   exit 0
 fi
 
-# If /root/.kube/config is a directory, try to find a file inside it
+# If /root/.kube/config is a directory, try to find a regular file inside it
 if [ -d /root/.kube/config ]; then
-  f=$(find /root/.kube/config -type f -maxdepth 4 | head -n 1 || true)
-  if [ -n "$f" ]; then
+  f=$(find /root/.kube/config -type f -maxdepth 4 2>/dev/null | head -n 1 || true)
+  if [ -n "$f" ] && [ -f "$f" ]; then
     cp "$f" /root/.kube/config
     chmod 600 /root/.kube/config
     exit 0
   fi
 fi
 
-# Otherwise, search for any kubeconfig-like file inside /root/.kube
-# common names: config, kubeconfig, config.yaml, kube-config
-f=$(find /root/.kube -type f -iname 'config*' -o -iname '*kube*' | head -n 1 || true)
-if [ -n "$f" ]; then
+# Otherwise, search for any kubeconfig-like regular file inside /root/.kube
+f=$(find /root/.kube -type f \( -iname 'config*' -o -iname '*kube*' \) 2>/dev/null | head -n 1 || true)
+if [ -n "$f" ] && [ -f "$f" ]; then
   cp "$f" /root/.kube/config
   chmod 600 /root/.kube/config
   exit 0
 fi
 
 # As a last resort, pick the first regular file anywhere under /root/.kube
-f=$(find /root/.kube -type f | head -n 1 || true)
-if [ -n "$f" ]; then
+f=$(find /root/.kube -type f 2>/dev/null | head -n 1 || true)
+if [ -n "$f" ] && [ -f "$f" ]; then
   cp "$f" /root/.kube/config
   chmod 600 /root/.kube/config
   exit 0
