@@ -3,7 +3,7 @@ package main
 import (
     "context"
     "fmt"
-	
+
     "dagger/chaos-toolkit/internal/dagger"
 )
 
@@ -16,21 +16,35 @@ func (m *ChaosToolkit) Hello(ctx context.Context) string {
 }
 
 // ChaosTest runs a complete chaos engineering test
-// NOTE: parameter names determine CLI flag names (kebab-case). Keep names aligned with your workflow.
+// Parameter names become CLI flags (kebab-case). Add defaults so flags are optional in the workflow.
+//
+// - chaosType default matches your workflow choice list
+// - chaosDuration default "60"
+// - loadTestDuration default "5m"
+// - loadTestVus default "10"
 func (m *ChaosToolkit) ChaosTest(
     ctx context.Context,
     namespace string,
     deployment string,
     kubeconfigDir *dagger.Directory,
     minikubeDir *dagger.Directory,
+    // +optional
+    // +default="pod-delete"
     chaosType string,
+    // +optional
+    // +default="60"
     chaosDuration string,
-    loadTestVus string,
+    // +optional
+    // +default="5m"
     loadTestDuration string,
-    cleanup bool, // <-- matches --cleanup in your workflow
+    // +optional
+    // +default="10"
+    loadTestVus string,
+    // cleanup flag to match workflow --cleanup
+    cleanup bool,
 ) (string, error) {
 
-    // Prefer minikubeDir when provided
+    // prefer minikubeDir when provided
     if minikubeDir != nil {
         kubeconfigDir = minikubeDir
     }
@@ -54,7 +68,7 @@ func (m *ChaosToolkit) ChaosTest(
     }
     fmt.Println("✅ Pre-flight checks passed!")
 
-    // Remaining phases - TODO
+    // TODO: implement operators, chaos injection, load test, reporting
     fmt.Println("\n📦 Phase 2: Installing Operators - TODO")
     fmt.Println("\n📊 Phase 3: Baseline Test - TODO")
     fmt.Println("\n💥 Phase 4: Chaos Injection - TODO")
@@ -118,9 +132,9 @@ func (m *ChaosToolkit) preflightChecks(
 }
 
 // kubectlContainer returns a container built via the Dagger client.
-// It uses dagger.Connect() as a local client and does not call Close() to remain compatible across SDK versions.
+// Adapt dagger.Connect usage if your SDK requires different signature.
 func (m *ChaosToolkit) kubectlContainer(ctx context.Context, kubeconfigDir *dagger.Directory) (*dagger.Container, error) {
-    client := dagger.Connect() // adjust if your SDK requires different usage
+    client := dagger.Connect()
 
     kubeconfigFile := kubeconfigDir.File("config")
 
