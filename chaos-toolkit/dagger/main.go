@@ -22,6 +22,7 @@ func (m *ChaosToolkit) ChaosTest(
     namespace string,
     deployment string,
     kubeconfigDir *dagger.Directory,
+    // +optional
     minikubeDir *dagger.Directory,
     // +optional
     // +default="pod-delete"
@@ -127,16 +128,20 @@ func (m *ChaosToolkit) preflightChecks(
 }
 
 // kubectlContainer returns a container built via the Dagger client.
-// It mounts the kubeconfig directory and ensures /root/.kube/config is a regular file
-// by removing a config directory (if present) and copying the first regular file found.
+// It conditionally mounts the kubeconfig directory when provided and only
+// sets KUBECONFIG and runs the copy/patch script if a directory was mounted.
 func (m *ChaosToolkit) kubectlContainer(ctx context.Context, kubeconfigDir *dagger.Directory) (*dagger.Container, error) {
     client := dagger.Connect()
 
     ctr := client.Container().
         From("alpine:latest").
-        WithExec([]string{"apk", "add", "--no-cache", "curl", "bash", "findutils"}).
-        WithDirectory("/root/.kube", kubeconfigDir).
-        WithExec([]string{
+        WithExec([]string{"apk", "add", "--no-cache", "curl", "bash", "findutils"})
+
+    // Only mount kubeconfig dir and run the helper script if provided
+    if kubeconfigDir != nil {
+        ctr = ctr.WithDirectory("/root/.kube", kubeconfigDir)
+
+        ctr = ctr.WithExec([]string{
             "sh", "-c",
             `set -e
 # If /root/.kube/config is already a regular file, ensure perms and exit
@@ -159,7 +164,6 @@ fi
 # Otherwise, search for any kubeconfig-like regular file inside /root/.kube
 f=$(find /root/.kube -type f \( -iname 'config*' -o -iname '*kube*' \) 2>/dev/null | head -n 1 || true)
 if [ -n "$f" ] && [ -f "$f" ]; then
-  # if there's a directory at /root/.kube/config, remove it first
   if [ -d /root/.kube/config ]; then rm -rf /root/.kube/config; fi
   cp "$f" /root/.kube/config
   chmod 600 /root/.kube/config
@@ -180,8 +184,11 @@ ls -la /root/.kube >&2
 exit 2
 `},
         ).
-        WithExec([]string{"sh", "-c", "curl -LO https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl && chmod +x ./kubectl && mv ./kubectl /usr/local/bin/kubectl"}).
-        WithEnvVariable("KUBECONFIG", "/root/.kube/config")
+            WithEnvVariable("KUBECONFIG", "/root/.kube/config")
+    }
+
+    // Always install kubectl (safe even if kubeconfig not provided)
+    ctr = ctr.WithExec([]string{"sh", "-c", "curl -LO https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl && chmod +x ./kubectl && mv ./kubectl /usr/local/bin/kubectl"})
 
     return ctr, nil
 }
