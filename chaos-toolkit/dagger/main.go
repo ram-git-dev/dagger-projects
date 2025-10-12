@@ -138,8 +138,8 @@ func (m *ChaosToolkit) kubectlContainer(ctx context.Context, kubeconfigDir *dagg
 }
 
 // minimal local main to keep `go build` happy; remove or replace when using generated Dagger wiring.
-func main() {
-    ctx := context.Background()
-    log.Println("ChaosToolkit build OK. Using local main.")
-    _ = ctx
-}
+//func main() {
+//    ctx := context.Background()
+//    log.Println("ChaosToolkit build OK. Using local main.")
+//    _ = ctx
+//}
