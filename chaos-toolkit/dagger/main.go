@@ -132,20 +132,38 @@ func (m *ChaosToolkit) preflightChecks(
 }
 
 // kubectlContainer returns a container built via the Dagger client.
-// It mounts the entire kubeconfig directory at /root/.kube so we avoid
-// assuming a single "config" file entry.
+// It mounts the entire kubeconfig directory and ensures /root/.kube/config
+// is a regular file by copying the first file found inside the mounted dir.
 func (m *ChaosToolkit) kubectlContainer(ctx context.Context, kubeconfigDir *dagger.Directory) (*dagger.Container, error) {
     client := dagger.Connect()
 
     ctr := client.Container().
         From("alpine:latest").
         WithExec([]string{"apk", "add", "--no-cache", "curl", "bash"}).
-        WithExec([]string{"sh", "-c", "curl -LO https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"}).
-        WithExec([]string{"chmod", "+x", "./kubectl"}).
-        WithExec([]string{"mv", "./kubectl", "/usr/local/bin/kubectl"}).
-        // mount the entire directory at /root/.kube
+        // mount the provided kubeconfig directory at /root/.kube
         WithDirectory("/root/.kube", kubeconfigDir).
-        WithExec([]string{"chmod", "-R", "600", "/root/.kube"}).
+        // install kubectl
+        WithExec([]string{
+            "sh", "-c",
+            "curl -LO https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl && chmod +x ./kubectl && mv ./kubectl /usr/local/bin/kubectl",
+        }).
+        // ensure a real file exists at /root/.kube/config: if it's already a file, do nothing;
+        // otherwise find the first regular file under /root/.kube and copy it to /root/.kube/config.
+        WithExec([]string{
+            "sh", "-c",
+            `if [ -f /root/.kube/config ]; then
+  chmod 600 /root/.kube/config
+else
+  f=$(find /root/.kube -type f -maxdepth 2 | head -n 1) || true
+  if [ -n "$f" ]; then
+    cp "$f" /root/.kube/config
+    chmod 600 /root/.kube/config
+  else
+    echo "no kubeconfig file found in /root/.kube" >&2
+    exit 2
+  fi
+fi`,
+        }).
         WithEnvVariable("KUBECONFIG", "/root/.kube/config")
 
     return ctr, nil
