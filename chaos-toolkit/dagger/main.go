@@ -3,7 +3,7 @@ package main
 import (
     "context"
     "fmt"
-
+	
     "dagger/chaos-toolkit/internal/dagger"
 )
 
@@ -16,6 +16,7 @@ func (m *ChaosToolkit) Hello(ctx context.Context) string {
 }
 
 // ChaosTest runs a complete chaos engineering test
+// NOTE: parameter names determine CLI flag names (kebab-case). Keep names aligned with your workflow.
 func (m *ChaosToolkit) ChaosTest(
     ctx context.Context,
     namespace string,
@@ -26,6 +27,7 @@ func (m *ChaosToolkit) ChaosTest(
     chaosDuration string,
     loadTestVus string,
     loadTestDuration string,
+    cleanup bool, // <-- matches --cleanup in your workflow
 ) (string, error) {
 
     // Prefer minikubeDir when provided
@@ -38,6 +40,7 @@ func (m *ChaosToolkit) ChaosTest(
     fmt.Printf("Chaos Type: %s\n", chaosType)
     fmt.Printf("Chaos Duration: %ss\n", chaosDuration)
     fmt.Printf("Load Test: %s VUs for %s\n", loadTestVus, loadTestDuration)
+    fmt.Printf("Cleanup after test: %v\n", cleanup)
 
     // Phase 1: Pre-flight checks
     fmt.Println("\n📋 Phase 1: Pre-flight Checks")
@@ -115,11 +118,9 @@ func (m *ChaosToolkit) preflightChecks(
 }
 
 // kubectlContainer returns a container built via the Dagger client.
-// This implementation matches SDKs where dagger.Connect() returns a client value.
-// It does NOT attempt to close the client because some SDK versions do not provide Close.
+// It uses dagger.Connect() as a local client and does not call Close() to remain compatible across SDK versions.
 func (m *ChaosToolkit) kubectlContainer(ctx context.Context, kubeconfigDir *dagger.Directory) (*dagger.Container, error) {
-    // Connect to the Dagger engine; adapt if your SDK has a different signature.
-    client := dagger.Connect()
+    client := dagger.Connect() // adjust if your SDK requires different usage
 
     kubeconfigFile := kubeconfigDir.File("config")
 
@@ -135,10 +136,3 @@ func (m *ChaosToolkit) kubectlContainer(ctx context.Context, kubeconfigDir *dagg
 
     return ctr, nil
 }
-
-// minimal local main to keep `go build` happy; remove or replace when using generated Dagger wiring.
-//func main() {
-//    ctx := context.Background()
-//    log.Println("ChaosToolkit build OK. Using local main.")
-//    _ = ctx
-//}
