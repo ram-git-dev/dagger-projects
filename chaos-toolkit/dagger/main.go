@@ -2,105 +2,133 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"time"
 
 	"dagger.io/dagger"
 )
 
+// ChaosToolkit struct
 type ChaosToolkit struct{}
 
-// Metrics holds test metrics
-type Metrics struct {
-	ErrorRate   float64
-	P99Latency  float64
-	Throughput  float64
-	SuccessRate float64
+// ChaosTestResult holds final test output
+type ChaosTestResult struct {
+	Passed       bool    `json:"passed"`
+	ErrorRate    float64 `json:"errorRate"`
+	P99Latency   int     `json:"p99Latency"`
+	RecoveryTime int     `json:"recoveryTime"`
 }
 
-// ChaosTest runs the chaos engineering pipeline
+// ChaosTest runs chaos and load tests
 func (m *ChaosToolkit) ChaosTest(
 	ctx context.Context,
 	namespace string,
 	deployment string,
+	chaosType string,
+	chaosDuration int,
+	loadDuration string,
+	loadVUs int,
+	cleanup bool,
 	kubeconfigDir *dagger.Directory,
 	minikubeDir *dagger.Directory,
-	cleanup bool,
 ) (string, error) {
+
 	// Get kubeconfig
 	kubeconfigFile := kubeconfigDir.File("config")
 
-	// Container with kubectl installed, root user
-	kubectl := dagger.NewClient().Container().
+	// Dagger container for kubectl
+	kubectl := dagger.Container().
 		From("alpine:latest").
 		WithExec([]string{"apk", "add", "--no-cache", "curl"}).
 		WithExec([]string{"sh", "-c", "curl -LO https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"}).
 		WithExec([]string{"chmod", "+x", "./kubectl"}).
 		WithExec([]string{"mv", "./kubectl", "/usr/local/bin/kubectl"}).
 		WithFile("/root/.kube/config", kubeconfigFile).
+		WithDirectory("/home/rbot/.minikube", minikubeDir).
 		WithExec([]string{"chmod", "600", "/root/.kube/config"}).
 		WithEnvVariable("KUBECONFIG", "/root/.kube/config")
 
-	// Mount minikube certs if provided
-	if minikubeDir != nil {
-		kubectl = kubectl.WithDirectory("/home/rbot/.minikube", minikubeDir)
+	fmt.Printf("Running chaos test on %s/%s: %s\n", namespace, deployment, chaosType)
+
+	// Inject chaos
+	switch chaosType {
+	case "pod-delete":
+		_, err := kubectl.WithExec([]string{
+			"kubectl", "delete", "pod", "-l", fmt.Sprintf("app=%s", deployment), "-n", namespace,
+		}).Stdout(ctx)
+		if err != nil {
+			return "", err
+		}
+
+	case "pod-network-latency":
+		// Use tc/netem in target pods (simplified)
+		fmt.Println("Pod network latency simulation would run here...")
+
+	case "pod-cpu-hog":
+		fmt.Println("Pod CPU hog simulation would run here...")
+
+	case "pod-memory-hog":
+		fmt.Println("Pod memory hog simulation would run here...")
 	}
 
-	fmt.Printf("🚀 Starting Chaos Engineering Pipeline on %s/%s\n", namespace, deployment)
+	// Wait chaos duration
+	time.Sleep(time.Duration(chaosDuration) * time.Second)
 
-	// Phase 1: Preflight checks
-	fmt.Println("\n📋 Phase 1: Pre-flight Checks")
-	if err := preflightChecks(ctx, kubectl, namespace, deployment); err != nil {
-		return "", fmt.Errorf("preflight failed: %w", err)
-	}
+	// Run k6 load test
+	k6 := dagger.Container().
+		From("loadimpact/k6:latest").
+		WithFile("/load-test.js", dagger.Directory(nil).File("load-test.js")). // replace with your actual script
+		WithExec([]string{"k6", "run", "--vus", fmt.Sprintf("%d", loadVUs), "--duration", loadDuration, "/load-test.js"})
 
-	// Phase 2: Install dependencies (k6, litmus)
-	fmt.Println("\n📦 Phase 2: Installing Dependencies")
-	if err := installDependencies(ctx, kubectl); err != nil {
-		return "", fmt.Errorf("dependency installation failed: %w", err)
-	}
+	// Collect k6 results (mocked for example)
+	output := `{"passed":true,"errorRate":0.0,"p99Latency":120,"recoveryTime":15}`
 
-	// Phase 3: Baseline test
-	fmt.Println("\n📊 Phase 3: Running Baseline Test")
-	baseline := &Metrics{ErrorRate: 0.5, P99Latency: 120, Throughput: 100, SuccessRate: 99.5}
-
-	// Phase 4: Chaos + Load
-	fmt.Println("\n💥 Phase 4: Injecting Chaos + Load Test")
-	chaos := &Metrics{ErrorRate: 3.2, P99Latency: 450, Throughput: 85, SuccessRate: 96.8}
-
-	// Phase 5: Recovery
-	fmt.Println("\n🔄 Phase 5: Recovery Test")
-	recoveryTime := 45 * time.Second
-
-	// Phase 6: Report
-	fmt.Println("\n📄 Phase 6: Generating Report")
-	reportPath := "/output/report.html"
-
-	// Phase 7: Cleanup
 	if cleanup {
-		fmt.Println("\n🧹 Phase 7: Cleaning Up")
-		// TODO: Implement cleanup
+		fmt.Println("Cleanup logic would run here...")
 	}
 
-	fmt.Println("\n✅ Pipeline Complete!")
-	return reportPath, nil
-}
+	// Parse JSON
+	var result ChaosTestResult
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		return "", err
+	}
 
-// Preflight checks if namespace & deployment exist
-func preflightChecks(ctx context.Context, kubectl *dagger.Container, namespace, deployment string) error {
-	fmt.Printf("Checking %s/%s...\n", namespace, deployment)
-	_, err := kubectl.WithExec([]string{"kubectl", "get", "deployment", deployment, "-n", namespace}).Stdout(ctx)
-	return err
-}
-
-// Install dependencies (stub)
-func installDependencies(ctx context.Context, kubectl *dagger.Container) error {
-	fmt.Println("Installing k6 operator and Litmus...")
-	// TODO: implement actual install
-	return nil
+	// Return JSON string
+	resultJSON, _ := json.Marshal(result)
+	return string(resultJSON), nil
 }
 
 func main() {
-	fmt.Println("Use Dagger CLI: dagger call chaos-test --namespace=... --deployment=... --kubeconfig-dir=... [--minikube-dir=...]")
+	ctx := context.Background()
+
+	// Connect dagger client
+	client, err := dagger.Connect(ctx, dagger.WithLogOutput(os.Stdout))
+	if err != nil {
+		log.Fatalf("failed to connect Dagger: %v", err)
+	}
+	defer client.Close()
+
+	ct := &ChaosToolkit{}
+
+	// Example call
+	out, err := ct.ChaosTest(
+		ctx,
+		"default",
+		"sample-app",
+		"pod-delete",
+		60,
+		"5m",
+		10,
+		true,
+		client.Host().Directory(".kube"),
+		client.Host().Directory(".minikube"),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println("Chaos Test Result:", out)
 }
