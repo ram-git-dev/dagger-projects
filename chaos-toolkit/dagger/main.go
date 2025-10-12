@@ -2,73 +2,81 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
-	"time"
+	"os"
+	"os/exec"
 
 	"dagger.io/dagger"
 )
 
-// ChaosToolkit holds your Dagger client and directories
-type ChaosToolkit struct {
-	Client       *dagger.Client
-	Kubeconfig   *dagger.Directory
-	MinikubeDir  *dagger.Directory
-}
-
-// Chaos modes
-func (ct *ChaosToolkit) KillPod(ctx context.Context, podName string) error {
-	fmt.Printf("[Chaos] Killing pod: %s\n", podName)
-	// Example: simulate pod deletion
-	time.Sleep(1 * time.Second)
-	fmt.Println("[Chaos] Pod killed")
-	return nil
-}
-
-func (ct *ChaosToolkit) StressCPU(ctx context.Context, duration time.Duration) error {
-	fmt.Printf("[Chaos] Stressing CPU for %s\n", duration)
-	time.Sleep(duration)
-	fmt.Println("[Chaos] CPU stress finished")
-	return nil
-}
-
-// K6 load test
-func (ct *ChaosToolkit) RunK6(ctx context.Context, scriptPath string) error {
-	fmt.Printf("[K6] Running load test: %s\n", scriptPath)
-	// simulate k6 run
-	time.Sleep(2 * time.Second)
-	fmt.Println("[K6] Load test finished")
-	return nil
-}
-
 func main() {
 	ctx := context.Background()
-
-	// Init Dagger client
-	client, err := dagger.Connect(ctx, dagger.WithLogOutput(log.Writer()))
+	client, err := dagger.Connect(ctx, dagger.WithLogOutput(os.Stdout))
 	if err != nil {
-		log.Fatalf("Failed to connect to Dagger: %v", err)
+		log.Fatalf("Failed to connect Dagger: %v", err)
 	}
 	defer client.Close()
 
-	ct := &ChaosToolkit{
-		Client:      client,
-		Kubeconfig:  client.Host().Directory("/home/user/.kube"),   // adjust path
-		MinikubeDir: client.Host().Directory("/home/user/.minikube"), // adjust path
+	// 1️⃣ Apply chaos experiments
+	litmusFolder := "./manifest/litmus"
+	experiments := []string{"cpu-hog.yaml", "memory-hog.yaml", "network-latency.yaml", "pod-delete.yaml"}
+
+	namespace := os.Getenv("NAMESPACE")
+	if namespace == "" {
+		namespace = "default"
 	}
 
-	// Run your chaos strategies + k6 sequentially
-	if err := ct.KillPod(ctx, "my-app-pod"); err != nil {
-		log.Fatalf("Chaos failed: %v", err)
+	for _, exp := range experiments {
+		expPath := litmusFolder + "/" + exp
+		cmd := exec.Command("kubectl", "apply", "-f", expPath, "-n", namespace)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			log.Fatalf("Failed to apply chaos experiment %s: %v", exp, err)
+		}
+		log.Printf("Applied chaos experiment: %s\n", exp)
 	}
 
-	if err := ct.StressCPU(ctx, 5*time.Second); err != nil {
-		log.Fatalf("Chaos failed: %v", err)
+	// 2️⃣ Run k6 tests
+	k6Folder := "./k6"
+	k6Container := client.Container().
+		From("loadimpact/k6:latest").
+		WithMountedDirectory("/tests", client.Host().Directory(k6Folder, dagger.HostDirectoryOpts{})).
+		WithWorkdir("/tests")
+
+	serviceURL := os.Getenv("SERVICE_URL")
+	if serviceURL == "" {
+		serviceURL = "http://sample-app.default.svc.cluster.local"
 	}
 
-	if err := ct.RunK6(ctx, "./k6-scripts/test.js"); err != nil {
-		log.Fatalf("K6 test failed: %v", err)
+	vus := os.Getenv("VUS")
+	if vus == "" {
+		vus = "10"
+	}
+	duration := os.Getenv("DURATION")
+	if duration == "" {
+		duration = "5m"
 	}
 
-	fmt.Println("All chaos + k6 steps completed successfully ✅")
+	k6Container = k6Container.WithExec([]string{"run", "--vus", vus, "--duration", duration, "test.js"})
+	output, err := k6Container.Stdout(ctx)
+	if err != nil {
+		log.Fatalf("Failed to run k6: %v", err)
+	}
+
+	log.Println("=== K6 Test Output ===")
+	log.Println(output)
+
+	// 3️⃣ Optional cleanup
+	for _, exp := range experiments {
+		expPath := litmusFolder + "/" + exp
+		cmd := exec.Command("kubectl", "delete", "-f", expPath, "-n", namespace)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			log.Printf("Warning: Failed to delete chaos experiment %s: %v", exp, err)
+		} else {
+			log.Printf("Deleted chaos experiment: %s\n", exp)
+		}
+	}
 }
