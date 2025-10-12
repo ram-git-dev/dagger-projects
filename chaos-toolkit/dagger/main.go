@@ -1,82 +1,87 @@
+// main.go
 package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"time"
 
 	"dagger.io/dagger"
 )
 
 func main() {
 	ctx := context.Background()
+
+	// ---- Read workflow inputs from env ----
+	namespace := getenv("NAMESPACE", "default")
+	deployment := getenv("DEPLOYMENT", "sample-app")
+	chaosType := getenv("CHAOS_TYPE", "pod-delete")
+	chaosDuration := getenv("CHAOS_DURATION", "60") // seconds
+	loadTestDuration := getenv("LOAD_TEST_DURATION", "5m")
+	loadTestVUs := getenv("LOAD_TEST_VUS", "10")
+	cleanup := getenv("CLEANUP_AFTER", "true")
+
+	fmt.Printf("Starting Chaos Test:\nNamespace: %s\nDeployment: %s\nChaos Type: %s\nDuration: %ss\nLoad Test: %s, VUs: %s\nCleanup: %s\n",
+		namespace, deployment, chaosType, chaosDuration, loadTestDuration, loadTestVUs, cleanup)
+
+	// ---- Connect to Dagger ----
 	client, err := dagger.Connect(ctx, dagger.WithLogOutput(os.Stdout))
 	if err != nil {
-		log.Fatalf("Failed to connect Dagger: %v", err)
+		log.Fatal("Failed to connect to Dagger:", err)
 	}
 	defer client.Close()
 
-	// 1️⃣ Apply chaos experiments
-	litmusFolder := "./manifest/litmus"
-	experiments := []string{"cpu-hog.yaml", "memory-hog.yaml", "network-latency.yaml", "pod-delete.yaml"}
-
-	namespace := os.Getenv("NAMESPACE")
-	if namespace == "" {
-		namespace = "default"
+	// ---- Apply Chaos Manifest ----
+	manifestPath := filepath.Join("manifest/litmus", chaosType+".yaml")
+	fmt.Println("Applying chaos manifest:", manifestPath)
+	applyCmd := exec.Command("kubectl", "apply", "-f", manifestPath, "-n", namespace)
+	applyCmd.Stdout = os.Stdout
+	applyCmd.Stderr = os.Stderr
+	if err := applyCmd.Run(); err != nil {
+		log.Fatal("Failed to apply chaos manifest:", err)
 	}
 
-	for _, exp := range experiments {
-		expPath := litmusFolder + "/" + exp
-		cmd := exec.Command("kubectl", "apply", "-f", expPath, "-n", namespace)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			log.Fatalf("Failed to apply chaos experiment %s: %v", exp, err)
-		}
-		log.Printf("Applied chaos experiment: %s\n", exp)
+	// ---- Wait for chaos duration ----
+	durationSec, _ := time.ParseDuration(chaosDuration + "s")
+	fmt.Println("Chaos running for", durationSec)
+	time.Sleep(durationSec)
+
+	// ---- Run k6 Load Test ----
+	k6Script := filepath.Join("k6", "test.js")
+	fmt.Println("Running k6 test:", k6Script)
+	k6Cmd := exec.Command("k6", "run",
+		"--vus", loadTestVUs,
+		"--duration", loadTestDuration,
+		k6Script,
+	)
+	k6Cmd.Stdout = os.Stdout
+	k6Cmd.Stderr = os.Stderr
+	if err := k6Cmd.Run(); err != nil {
+		log.Fatal("k6 test failed:", err)
 	}
 
-	// 2️⃣ Run k6 tests
-	k6Folder := "./k6"
-	k6Container := client.Container().
-		From("loadimpact/k6:latest").
-		WithMountedDirectory("/tests", client.Host().Directory(k6Folder, dagger.HostDirectoryOpts{})).
-		WithWorkdir("/tests")
-
-	serviceURL := os.Getenv("SERVICE_URL")
-	if serviceURL == "" {
-		serviceURL = "http://sample-app.default.svc.cluster.local"
-	}
-
-	vus := os.Getenv("VUS")
-	if vus == "" {
-		vus = "10"
-	}
-	duration := os.Getenv("DURATION")
-	if duration == "" {
-		duration = "5m"
-	}
-
-	k6Container = k6Container.WithExec([]string{"run", "--vus", vus, "--duration", duration, "test.js"})
-	output, err := k6Container.Stdout(ctx)
-	if err != nil {
-		log.Fatalf("Failed to run k6: %v", err)
-	}
-
-	log.Println("=== K6 Test Output ===")
-	log.Println(output)
-
-	// 3️⃣ Optional cleanup
-	for _, exp := range experiments {
-		expPath := litmusFolder + "/" + exp
-		cmd := exec.Command("kubectl", "delete", "-f", expPath, "-n", namespace)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			log.Printf("Warning: Failed to delete chaos experiment %s: %v", exp, err)
-		} else {
-			log.Printf("Deleted chaos experiment: %s\n", exp)
+	// ---- Cleanup Chaos if requested ----
+	if cleanup == "true" {
+		fmt.Println("Cleaning up chaos manifest...")
+		delCmd := exec.Command("kubectl", "delete", "-f", manifestPath, "-n", namespace)
+		delCmd.Stdout = os.Stdout
+		delCmd.Stderr = os.Stderr
+		if err := delCmd.Run(); err != nil {
+			log.Println("Warning: failed to cleanup manifest:", err)
 		}
 	}
+
+	fmt.Println("Chaos + k6 orchestration complete ✅")
+}
+
+// getenv is a helper to read env with default
+func getenv(key, def string) string {
+	if val := os.Getenv(key); val != "" {
+		return val
+	}
+	return def
 }
