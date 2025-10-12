@@ -42,11 +42,10 @@ func (m *ChaosToolkit) ChaosTest(
 
     // Phase 1: Pre-flight checks
     fmt.Println("\n📋 Phase 1: Pre-flight Checks")
-    kubectl, client, err := m.kubectlContainer(ctx, kubeconfigDir)
+    kubectl, err := m.kubectlContainer(ctx, kubeconfigDir)
     if err != nil {
         return "", fmt.Errorf("failed to prepare kubectl container: %w", err)
     }
-    defer client.Close()
 
     if err := m.preflightChecks(ctx, kubectl, namespace, deployment); err != nil {
         return "", fmt.Errorf("pre-flight checks failed: %w", err)
@@ -116,10 +115,11 @@ func (m *ChaosToolkit) preflightChecks(
     return nil
 }
 
-// kubectlContainer returns a container plus the connected dagger client.
-// Adapt dagger.Connect usage if your SDK has a different signature.
-func (m *ChaosToolkit) kubectlContainer(ctx context.Context, kubeconfigDir *dagger.Directory) (*dagger.Container, *dagger.Client, error) {
-    // dagger.Connect() may differ by SDK version. This assumes Connect() returns *dagger.Client.
+// kubectlContainer returns a container built via the Dagger client.
+// This implementation matches SDKs where dagger.Connect() returns a client value.
+// It does NOT attempt to close the client because some SDK versions do not provide Close.
+func (m *ChaosToolkit) kubectlContainer(ctx context.Context, kubeconfigDir *dagger.Directory) (*dagger.Container, error) {
+    // Connect to the Dagger engine; adapt if your SDK has a different signature.
     client := dagger.Connect()
 
     kubeconfigFile := kubeconfigDir.File("config")
@@ -134,7 +134,7 @@ func (m *ChaosToolkit) kubectlContainer(ctx context.Context, kubeconfigDir *dagg
         WithExec([]string{"chmod", "600", "/root/.kube/config"}).
         WithEnvVariable("KUBECONFIG", "/root/.kube/config")
 
-    return ctr, client, nil
+    return ctr, nil
 }
 
 // minimal local main to keep `go build` happy; remove or replace when using generated Dagger wiring.
