@@ -87,14 +87,12 @@ jobs:
           go mod download
           
           # Run the chaos test
-          dagger call chaos-test \
-            --namespace="${{ inputs.namespace }}" \
-            --deployment="${{ inputs.deployment }}" \
-            --chaos-type="${{ inputs.chaos_type }}" \
-            --chaos-duration="${{ inputs.chaos_duration }}" \
-            --load-test-duration="${{ inputs.load_test_duration }}" \
-            --load-test-vus="${{ inputs.load_test_vus }}" \
-            --cleanup=${{ inputs.cleanup_after }}
+           dagger call chaos-test \
+             --namespace="${{ inputs.namespace }}" \
+             --deployment="${{ inputs.deployment }}" \
+             --kubeconfig-dir="$HOME/.kube" \
+             --minikube-dir="$HOME/.minikube" \
+             --cleanup=${{ inputs.cleanup_after }}
         env:
           KUBECONFIG: ${{ env.HOME }}/.kube/config
       
