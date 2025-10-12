@@ -1,0 +1,32 @@
+apiVersion: k6.io/v1alpha1
+kind: TestRun
+metadata:
+  name: chaos-load-test
+  namespace: {{NAMESPACE}}
+spec:
+  parallelism: 1
+  script:
+    configMap:
+      name: k6-test-script
+      file: test.js
+  runner:
+    image: grafana/k6:latest
+    env:
+      - name: DEPLOYMENT
+        value: "{{DEPLOYMENT}}"
+      - name: NAMESPACE
+        value: "{{NAMESPACE}}"
+      - name: VUS
+        value: "{{VUS}}"
+      - name: DURATION
+        value: "{{DURATION}}"
+    resources:
+      requests:
+        memory: "128Mi"
+        cpu: "100m"
+      limits:
+        memory: "256Mi"
+        cpu: "500m"
+  arguments: "--out json=results.json"
+  separate: false
+  cleanup: "post"

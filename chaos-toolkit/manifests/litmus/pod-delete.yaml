@@ -1,0 +1,36 @@
+apiVersion: litmuschaos.io/v1alpha1
+kind: ChaosEngine
+metadata:
+  name: pod-delete-chaos
+  namespace: {{NAMESPACE}}
+spec:
+  appinfo:
+    appns: '{{NAMESPACE}}'
+    applabel: 'app={{DEPLOYMENT}}'
+    appkind: 'deployment'
+  engineState: 'active'
+  chaosServiceAccount: litmus-admin
+  experiments:
+    - name: pod-delete
+      spec:
+        components:
+          env:
+            # Total duration of chaos in seconds
+            - name: TOTAL_CHAOS_DURATION
+              value: '{{CHAOS_DURATION}}'
+            
+            # Interval between chaos iterations
+            - name: CHAOS_INTERVAL
+              value: '10'
+            
+            # Force delete pods (true/false)
+            - name: FORCE
+              value: 'false'
+            
+            # Percentage of pods to delete (0-100)
+            - name: PODS_AFFECTED_PERC
+              value: '50'
+            
+            # Sequence of chaos: serial or parallel
+            - name: SEQUENCE
+              value: 'parallel'

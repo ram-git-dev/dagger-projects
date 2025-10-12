@@ -1,0 +1,36 @@
+apiVersion: litmuschaos.io/v1alpha1
+kind: ChaosEngine
+metadata:
+  name: cpu-hog-chaos
+  namespace: {{NAMESPACE}}
+spec:
+  appinfo:
+    appns: '{{NAMESPACE}}'
+    applabel: 'app={{DEPLOYMENT}}'
+    appkind: 'deployment'
+  engineState: 'active'
+  chaosServiceAccount: litmus-admin
+  experiments:
+    - name: pod-cpu-hog
+      spec:
+        components:
+          env:
+            # Total duration of chaos
+            - name: TOTAL_CHAOS_DURATION
+              value: '{{CHAOS_DURATION}}'
+            
+            # Number of CPU cores to consume
+            - name: CPU_CORES
+              value: '1'
+            
+            # Percentage of pods to affect
+            - name: PODS_AFFECTED_PERC
+              value: '50'
+            
+            # Target container (empty for all)
+            - name: TARGET_CONTAINER
+              value: ''
+            
+            # CPU load percentage (0-100)
+            - name: CPU_LOAD
+              value: '100'

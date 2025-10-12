@@ -1,186 +1,232 @@
-# 🧪 Chaos Engineering Toolkit
+# Chaos Engineering Toolkit
 
-A universal, plug-and-play chaos engineering platform that works with **any Kubernetes cluster**. Run chaos experiments and load tests against your applications with just a few clicks.
+Automated chaos testing pipeline for Kubernetes using Dagger, LitmusChaos, and k6. Connect any cluster, select your target, run experiments, get results.
 
-## 🚀 Features
+## What It Does
 
-- ✅ **Universal**: Works with any K8s cluster (minikube, EKS, GKE, AKS, etc.)
-- ✅ **No Installation Required**: Everything runs via GitHub Actions
-- ✅ **Multiple Chaos Types**: Pod delete, network latency, CPU/memory stress
-- ✅ **Automated Load Testing**: Built-in k6 integration
-- ✅ **Beautiful Reports**: HTML reports with charts and metrics
-- ✅ **Safe**: Automated cleanup and recovery checks
+- Injects faults into your K8s deployments (pod kills, latency, resource stress)
+- Runs concurrent load tests to measure impact
+- Collects metrics and generates HTML reports
+- All orchestrated via GitHub Actions + Dagger
 
-## 📋 Prerequisites
+## Architecture
 
-- A Kubernetes cluster (any provider)
-- `kubectl` configured locally
-- A GitHub account
-
-## 🎯 Quick Start
-
-### 1. Fork This Repository
-
-Click the "Fork" button at the top right of this page.
-
-### 2. Add Your Kubeconfig
-
-```bash
-# Encode your kubeconfig
-cat ~/.kube/config | base64 | pbcopy  # macOS
-cat ~/.kube/config | base64 | xclip   # Linux
+```
+GitHub Actions → Dagger Pipeline → Your K8s Cluster
+                      ↓
+              ┌───────┴────────┐
+              ↓                ↓
+         LitmusChaos         k6
+         (fault injection)   (load generation)
+              ↓                ↓
+           Metrics Collection
+              ↓
+         HTML Report
 ```
 
-Go to your forked repo:
-- Settings → Secrets and variables → Actions
-- Click "New repository secret"
+## Prerequisites
+
+- Kubernetes cluster with `kubectl` access
+- GitHub account
+- Dagger CLI (optional for local runs)
+
+## Setup
+
+### 1. Add Kubeconfig Secret
+
+```bash
+cat ~/.kube/config | base64 > kubeconfig.b64
+```
+
+Add to GitHub repo:
+- Settings → Secrets → Actions
 - Name: `KUBECONFIG_BASE64`
-- Value: Paste the base64 string
-- Click "Add secret"
+- Value: contents of `kubeconfig.b64`
 
-### 3. Run Your First Chaos Test
+### 2. Run Test
 
-1. Go to **Actions** tab
-2. Click **"Chaos Engineering Test"**
-3. Click **"Run workflow"**
-4. Fill in the form:
-   - **Namespace**: `default` (or your namespace)
-   - **Deployment**: `my-app` (your deployment name)
-   - **Chaos Type**: `pod-delete`
-   - **Duration**: `60` (seconds)
-   - **VUs**: `10` (virtual users)
-5. Click **"Run workflow"**
+Actions → "Chaos Engineering Test" → Run workflow
 
-### 4. View Results
+**Required inputs:**
+- `namespace`: Target namespace
+- `deployment`: Target deployment name  
+- `chaos_type`: Fault type (see below)
+- `chaos_duration`: Duration in seconds
+- `load_test_vus`: Concurrent users
+- `load_test_duration`: Load test duration
 
-After the test completes (~5-10 minutes):
+### 3. Get Results
 
-1. Go to the workflow run
-2. Scroll to **Artifacts** section
-3. Download `chaos-report-XXX`
-4. Unzip and open `report.html` in your browser
+Download artifact `chaos-report-{run_number}.zip` from workflow run. Contains:
+- `report.html` - Visual report with charts
+- `summary.json` - Raw metrics
 
-## 🧪 Supported Chaos Experiments
+## Supported Chaos Types
 
-| Chaos Type | Description | Duration |
-|------------|-------------|----------|
-| `pod-delete` | Randomly deletes pods | 30-300s |
-| `pod-network-latency` | Injects network delay | 30-300s |
-| `pod-cpu-hog` | Consumes CPU resources | 30-300s |
-| `pod-memory-hog` | Consumes memory | 30-300s |
+| Type | Effect | Tunable Parameters |
+|------|--------|-------------------|
+| `pod-delete` | Kills pods randomly | `CHAOS_INTERVAL`, `PODS_AFFECTED_PERC` |
+| `pod-network-latency` | Injects network delay | `NETWORK_LATENCY` (ms) |
+| `pod-cpu-hog` | Consumes CPU | `CPU_CORES`, `CPU_LOAD` |
+| `pod-memory-hog` | Consumes memory | `MEMORY_CONSUMPTION` (MB) |
 
-## 📊 What Gets Tested?
+## Metrics Collected
 
-The pipeline measures:
-
-- **Error Rate**: % of failed requests during chaos
-- **Latency**: p50, p95, p99 response times
+- **Error rate**: Failed requests / total requests
+- **Latency percentiles**: p50, p95, p99
 - **Throughput**: Requests per second
-- **Recovery Time**: How long to return to normal
-- **Blast Radius**: % of pods affected
+- **Recovery time**: Time to restore healthy state
+- **Blast radius**: Percentage of pods affected
 
-## 🎯 Success Criteria
+## Test Phases
 
-A test **passes** if:
-- ✅ Error rate < 5% during chaos
-- ✅ P99 latency < 500ms
-- ✅ Recovery time < 60s
-- ✅ All pods recover successfully
+```
+1. Pre-flight checks (namespace, deployment validation)
+2. Operator installation (Litmus, k6)
+3. Baseline test (2min, no chaos)
+4. Chaos injection + load test (configurable duration)
+5. Recovery measurement
+6. Report generation
+7. Cleanup (optional)
+```
 
-## 🔧 Advanced Usage
+## Pass/Fail Criteria
 
-### Custom Load Test Script
+Test passes if:
+- Error rate < 5%
+- P99 latency < 500ms
+- Recovery time < 60s
 
-Create `k6-script.js` in your repo:
+Thresholds configurable in `dagger/main.go`.
+
+## Local Development
+
+```bash
+cd chaos-toolkit/dagger
+
+# Test Dagger pipeline locally
+dagger call chaos-test \
+  --namespace=default \
+  --deployment=nginx \
+  --chaos-type=pod-delete \
+  --chaos-duration=60 \
+  --load-test-duration=5m \
+  --load-test-vus=10
+
+# Output saved to output/
+```
+
+## Customization
+
+### Custom Load Test
+
+Edit `manifests/k6/test.js`:
 
 ```javascript
-import http from 'k6/http';
-import { check } from 'k6';
-
 export default function () {
-  const res = http.get('http://your-service/api');
-  check(res, {
-    'status is 200': (r) => r.status === 200,
-  });
+  http.post('http://my-api/endpoint', JSON.stringify({...}));
 }
 ```
 
-### Run Multiple Chaos Types
+### Custom Chaos Parameters
 
-You can trigger multiple tests with different chaos types to compare resilience.
+Edit manifest templates in `manifests/litmus/*.yaml`. Variables replaced at runtime:
+- `{{NAMESPACE}}`
+- `{{DEPLOYMENT}}`
+- `{{CHAOS_DURATION}}`
 
-### Integration with CI/CD
+### Custom Thresholds
 
-Add to your deployment pipeline:
+Edit `dagger/main.go`:
+
+```go
+const (
+    MaxErrorRate = 0.05    // 5%
+    MaxP99Latency = 500.0  // ms
+    MaxRecoveryTime = 60   // seconds
+)
+```
+
+## File Structure
+
+```
+chaos-toolkit/
+├── .github/workflows/
+│   └── chaos-test.yml          # GitHub Actions workflow
+├── dagger/
+│   ├── main.go                 # Dagger pipeline logic
+│   ├── go.mod
+│   └── go.sum
+├── manifests/
+│   ├── litmus/
+│   │   ├── pod-delete.yaml
+│   │   ├── network-latency.yaml
+│   │   ├── cpu-hog.yaml
+│   │   └── memory-hog.yaml
+│   └── k6/
+│       ├── test.js             # Load test script
+│       └── testrun.yaml        # K6 TestRun CRD
+├── templates/
+│   └── report.html             # HTML report template
+└── scripts/
+    ├── install-operators.sh
+    └── cleanup.sh
+```
+
+## CI/CD Integration
+
+Trigger from deployment pipeline:
 
 ```yaml
 - name: Chaos Test
-  uses: ./.github/workflows/chaos-test.yml
+  uses: ram-git-dev/dagger-projects/.github/workflows/chaos-test.yml@main
   with:
-    namespace: production
+    namespace: staging
     deployment: api-server
     chaos_type: pod-delete
+    chaos_duration: 60
 ```
 
-## 📈 Example Report
+## Dependencies
 
-The HTML report includes:
+**Installed by pipeline:**
+- LitmusChaos 3.x
+- k6-operator 0.x
 
-- **Summary Dashboard**: Pass/fail status, key metrics
-- **Timeline Chart**: Error rate and latency over time
-- **Chaos Events**: When chaos was injected/stopped
-- **Recovery Analysis**: Pod status during recovery
-- **Recommendations**: Suggestions for improvement
+**Runtime:**
+- Dagger 0.11+
+- Go 1.21+
 
-## 🛡️ Safety Features
+## Troubleshooting
 
-- **Dry-run mode**: Test without actual chaos
-- **Automatic rollback**: If error rate exceeds threshold
-- **Cleanup**: Removes all test resources after completion
-- **Isolation**: Operators installed in temporary namespaces
+**"namespace not found"**
+- Verify namespace exists: `kubectl get ns`
 
-## 🤝 Contributing
+**"deployment not found"**  
+- Check deployment name: `kubectl get deploy -n <namespace>`
 
-Contributions welcome! Please:
+**"chaos experiments failing"**
+- Check ServiceAccount permissions
+- Verify Litmus installed: `kubectl get pods -n litmus`
 
-1. Fork the repo
-2. Create a feature branch
-3. Add tests
-4. Submit a PR
+**"no metrics collected"**
+- Check k6 pods: `kubectl get pods -n <namespace> -l runner=chaos-load-test`
+- Check logs: `kubectl logs -n <namespace> -l runner=chaos-load-test`
 
-## 📝 License
+## Contributing
 
-MIT License - see LICENSE file for details
+PRs welcome. Please:
+1. Test locally with Dagger first
+2. Ensure Go code passes `go vet` and `go fmt`
+3. Update README if adding features
 
-## 🙋 FAQ
+## License
 
-### Can I use this in production?
+MIT
 
-Yes! But start with staging environments first. Use shorter chaos durations and monitor closely.
+## References
 
-### Does this require installing anything in my cluster?
-
-Temporarily, yes. The pipeline installs k6-operator and Litmus, but removes them after testing (if cleanup enabled).
-
-### Can I test multiple services at once?
-
-Not yet, but it's on the roadmap! For now, run separate workflows for each service.
-
-### How do I customize the load test?
-
-Edit the k6 script in `manifests/k6/test.js` to match your API endpoints and patterns.
-
-### What if my cluster doesn't have Prometheus?
-
-No problem! The pipeline collects metrics from k6 directly. Prometheus is optional.
-
-## 🎓 Learn More
-
-- [Chaos Engineering Principles](https://principlesofchaos.org/)
-- [k6 Documentation](https://k6.io/docs/)
+- [Principles of Chaos Engineering](https://principlesofchaos.org/)
 - [LitmusChaos Docs](https://docs.litmuschaos.io/)
+- [k6 Load Testing](https://k6.io/docs/)
 - [Dagger Documentation](https://docs.dagger.io/)
-
----
-
-**Made with ❤️ for chaos engineers everywhere**
