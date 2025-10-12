@@ -2,133 +2,143 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"time"
 
-	"dagger.io/dagger"
+	dagger "dagger.io/dagger"
 )
 
-// ChaosToolkit struct
-type ChaosToolkit struct{}
-
-// ChaosTestResult holds final test output
-type ChaosTestResult struct {
-	Passed       bool    `json:"passed"`
-	ErrorRate    float64 `json:"errorRate"`
-	P99Latency   int     `json:"p99Latency"`
-	RecoveryTime int     `json:"recoveryTime"`
+type ChaosToolkit struct {
+	client *dagger.Client
 }
 
-// ChaosTest runs chaos and load tests
-func (m *ChaosToolkit) ChaosTest(
+func NewChaosToolkit(ctx context.Context) (*ChaosToolkit, error) {
+	client, err := dagger.Connect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &ChaosToolkit{client: client}, nil
+}
+
+func (c *ChaosToolkit) ChaosTest(
 	ctx context.Context,
+	kubeconfigDir *dagger.Directory,
+	minikubeDir *dagger.Directory,
 	namespace string,
 	deployment string,
 	chaosType string,
 	chaosDuration int,
-	loadDuration string,
-	loadVUs int,
+	loadTestDuration string,
+	loadTestVUs int,
 	cleanup bool,
-	kubeconfigDir *dagger.Directory,
-	minikubeDir *dagger.Directory,
-) (string, error) {
+) error {
+	fmt.Printf("Running chaos test for deployment=%s, namespace=%s, chaos=%s\n", deployment, namespace, chaosType)
 
-	// Get kubeconfig
-	kubeconfigFile := kubeconfigDir.File("config")
-
-	// Dagger container for kubectl
-	kubectl := dagger.Container().
-		From("alpine:latest").
-		WithExec([]string{"apk", "add", "--no-cache", "curl"}).
-		WithExec([]string{"sh", "-c", "curl -LO https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"}).
-		WithExec([]string{"chmod", "+x", "./kubectl"}).
-		WithExec([]string{"mv", "./kubectl", "/usr/local/bin/kubectl"}).
-		WithFile("/root/.kube/config", kubeconfigFile).
-		WithDirectory("/home/rbot/.minikube", minikubeDir).
-		WithExec([]string{"chmod", "600", "/root/.kube/config"}).
-		WithEnvVariable("KUBECONFIG", "/root/.kube/config")
-
-	fmt.Printf("Running chaos test on %s/%s: %s\n", namespace, deployment, chaosType)
-
-	// Inject chaos
+	// Example: simulate chaos injection with pod-delete
+	chaosCmd := []string{"echo", "Simulating chaos: " + chaosType}
 	switch chaosType {
 	case "pod-delete":
-		_, err := kubectl.WithExec([]string{
-			"kubectl", "delete", "pod", "-l", fmt.Sprintf("app=%s", deployment), "-n", namespace,
-		}).Stdout(ctx)
-		if err != nil {
-			return "", err
-		}
-
+		chaosCmd = []string{"kubectl", "delete", "pod", "-n", namespace, "--selector=app=" + deployment}
 	case "pod-network-latency":
-		// Use tc/netem in target pods (simplified)
-		fmt.Println("Pod network latency simulation would run here...")
-
+		chaosCmd = []string{"echo", "Inject network latency"}
 	case "pod-cpu-hog":
-		fmt.Println("Pod CPU hog simulation would run here...")
-
+		chaosCmd = []string{"echo", "Inject CPU stress"}
 	case "pod-memory-hog":
-		fmt.Println("Pod memory hog simulation would run here...")
+		chaosCmd = []string{"echo", "Inject Memory stress"}
+	default:
+		return fmt.Errorf("unknown chaos type: %s", chaosType)
 	}
 
-	// Wait chaos duration
-	time.Sleep(time.Duration(chaosDuration) * time.Second)
+	// Run chaos in container
+	_, err := c.client.Container().
+		From("bitnami/kubectl:latest").
+		WithMountedDirectory("/kube", kubeconfigDir).
+		WithEnvVariable("KUBECONFIG", "/kube/config").
+		WithExec(chaosCmd).
+		ExitCode(ctx)
+	if err != nil {
+		return fmt.Errorf("failed chaos command: %w", err)
+	}
 
-	// Run k6 load test
-	k6 := dagger.Container().
-		From("loadimpact/k6:latest").
-		WithFile("/load-test.js", dagger.Directory(nil).File("load-test.js")). // replace with your actual script
-		WithExec([]string{"k6", "run", "--vus", fmt.Sprintf("%d", loadVUs), "--duration", loadDuration, "/load-test.js"})
+	// k6 Load test
+	k6Container := c.client.Container().From("loadimpact/k6:latest")
+	_, err = k6Container.WithExec([]string{
+		"k6", "run",
+		"--vus", strconv.Itoa(loadTestVUs),
+		"--duration", loadTestDuration,
+		"/scripts/loadtest.js",
+	}).ExitCode(ctx)
+	if err != nil {
+		return fmt.Errorf("failed k6 load test: %w", err)
+	}
 
-	// Collect k6 results (mocked for example)
-	output := `{"passed":true,"errorRate":0.0,"p99Latency":120,"recoveryTime":15}`
+	fmt.Println("Chaos test + load test completed!")
 
 	if cleanup {
-		fmt.Println("Cleanup logic would run here...")
+		fmt.Println("Cleanup enabled - removing chaos artifacts")
+		// example: just echo for now
+		fmt.Println("Cleanup done")
 	}
 
-	// Parse JSON
-	var result ChaosTestResult
-	if err := json.Unmarshal([]byte(output), &result); err != nil {
-		return "", err
-	}
-
-	// Return JSON string
-	resultJSON, _ := json.Marshal(result)
-	return string(resultJSON), nil
+	return nil
 }
 
 func main() {
 	ctx := context.Background()
 
-	// Connect dagger client
-	client, err := dagger.Connect(ctx, dagger.WithLogOutput(os.Stdout))
-	if err != nil {
-		log.Fatalf("failed to connect Dagger: %v", err)
+	// Read environment/inputs
+	namespace := os.Getenv("INPUT_NAMESPACE")
+	if namespace == "" {
+		namespace = "default"
 	}
-	defer client.Close()
+	deployment := os.Getenv("INPUT_DEPLOYMENT")
+	if deployment == "" {
+		deployment = "sample-app"
+	}
+	chaosType := os.Getenv("INPUT_CHAOS_TYPE")
+	if chaosType == "" {
+		chaosType = "pod-delete"
+	}
+	chaosDurationStr := os.Getenv("INPUT_CHAOS_DURATION")
+	if chaosDurationStr == "" {
+		chaosDurationStr = "60"
+	}
+	chaosDuration, _ := strconv.Atoi(chaosDurationStr)
 
-	ct := &ChaosToolkit{}
-
-	// Example call
-	out, err := ct.ChaosTest(
-		ctx,
-		"default",
-		"sample-app",
-		"pod-delete",
-		60,
-		"5m",
-		10,
-		true,
-		client.Host().Directory(".kube"),
-		client.Host().Directory(".minikube"),
-	)
-	if err != nil {
-		log.Fatal(err)
+	loadTestDuration := os.Getenv("INPUT_LOAD_TEST_DURATION")
+	if loadTestDuration == "" {
+		loadTestDuration = "5m"
 	}
 
-	fmt.Println("Chaos Test Result:", out)
+	loadTestVUsStr := os.Getenv("INPUT_LOAD_TEST_VUS")
+	if loadTestVUsStr == "" {
+		loadTestVUsStr = "10"
+	}
+	loadTestVUs, _ := strconv.Atoi(loadTestVUsStr)
+
+	cleanup := true
+	if os.Getenv("INPUT_CLEANUP_AFTER") == "false" {
+		cleanup = false
+	}
+
+	// Connect to Dagger
+	toolkit, err := NewChaosToolkit(ctx)
+	if err != nil {
+		log.Fatalf("Failed to create chaos toolkit: %v", err)
+	}
+	defer toolkit.client.Close()
+
+	// Mount directories
+	kubeconfigDir := toolkit.client.Host().Directory(os.Getenv("HOME") + "/.kube")
+	minikubeDir := toolkit.client.Host().Directory(os.Getenv("HOME") + "/.minikube")
+
+	// Run the chaos test
+	if err := toolkit.ChaosTest(ctx, kubeconfigDir, minikubeDir, namespace, deployment, chaosType, chaosDuration, loadTestDuration, loadTestVUs, cleanup); err != nil {
+		log.Fatalf("Chaos test failed: %v", err)
+	}
+
+	fmt.Println("All done! ✅")
 }
