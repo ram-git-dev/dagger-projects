@@ -73,23 +73,29 @@ jobs:
           kubectl cluster-info
           kubectl get nodes
       
+      - name: Install Dagger CLI
+        run: |
+          cd /usr/local
+          curl -L https://dl.dagger.io/dagger/install.sh | sh
+          dagger version
+      
       - name: Run Dagger Chaos Pipeline
-        uses: dagger/dagger-for-github@v6
-        with:
-          version: "latest"
-          verb: call
-          module: github.com/${{ github.repository }}/dagger@${{ github.ref }}
-          args: >
-            chaos-test
-            --namespace="${{ inputs.namespace }}"
-            --deployment="${{ inputs.deployment }}"
-            --chaos-type="${{ inputs.chaos_type }}"
-            --chaos-duration="${{ inputs.chaos_duration }}"
-            --load-test-duration="${{ inputs.load_test_duration }}"
-            --load-test-vus="${{ inputs.load_test_vus }}"
+        working-directory: chaos-toolkit/dagger
+        run: |
+          # Install dependencies
+          go mod download
+          
+          # Run the chaos test
+          dagger call chaos-test \
+            --namespace="${{ inputs.namespace }}" \
+            --deployment="${{ inputs.deployment }}" \
+            --chaos-type="${{ inputs.chaos_type }}" \
+            --chaos-duration="${{ inputs.chaos_duration }}" \
+            --load-test-duration="${{ inputs.load_test_duration }}" \
+            --load-test-vus="${{ inputs.load_test_vus }}" \
             --cleanup=${{ inputs.cleanup_after }}
         env:
-          KUBECONFIG: ${{ github.workspace }}/kubeconfig
+          KUBECONFIG: ${{ env.HOME }}/.kube/config
       
       - name: Upload Chaos Report
         if: always()
@@ -97,8 +103,8 @@ jobs:
         with:
           name: chaos-report-${{ github.run_number }}
           path: |
-            dagger/output/*.html
-            dagger/output/*.json
+            chaos-toolkit/output/*.html
+            chaos-toolkit/output/*.json
           retention-days: 30
       
       - name: Comment PR with Results
@@ -107,7 +113,7 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const summary = fs.readFileSync('dagger/output/summary.json', 'utf8');
+            const summary = fs.readFileSync('chaos-toolkit/output/summary.json', 'utf8');
             const data = JSON.parse(summary);
             
             const comment = `## 🧪 Chaos Test Results

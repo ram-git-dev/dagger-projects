@@ -27,4 +27,5 @@ jobs:
 
       - name: Run build script
         run: |
+          cd dagger
           go run main.go
