@@ -8,13 +8,11 @@ on:
         required: true
         default: 'default'
         type: string
-      
       deployment:
         description: 'Target deployment name'
         required: true
         default: 'sample-app'
         type: string
-      
       chaos_type:
         description: 'Type of chaos to inject'
         required: true
@@ -25,25 +23,21 @@ on:
           - pod-cpu-hog
           - pod-memory-hog
         default: 'pod-delete'
-      
       chaos_duration:
         description: 'Chaos duration in seconds'
         required: true
         default: '60'
         type: string
-      
       load_test_duration:
         description: 'Load test duration (e.g., 5m, 300s)'
         required: true
         default: '5m'
         type: string
-      
       load_test_vus:
         description: 'Number of virtual users (concurrent requests)'
         required: true
         default: '10'
         type: string
-      
       cleanup_after:
         description: 'Clean up operators after test?'
         required: true
@@ -53,49 +47,71 @@ on:
 jobs:
   chaos-test:
     runs-on: self-hosted
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.21'
-      
-      - name: Setup kubeconfig
+
+      - name: Prepare kubeconfig for Dagger
+        id: prepare-kube
         run: |
+          set -euo pipefail
           mkdir -p $HOME/.kube
-          echo "${{ secrets.KUBECONFIG_BASE64 }}" | base64 -d > $HOME/.kube/config
-          chmod 600 $HOME/.kube/config
-          
-          # Test connection
-          kubectl cluster-info
-          kubectl get nodes
-      
+
+          # Option A: decode an embedded kubeconfig secret (preferred)
+          if [ -n "${{ secrets.KUBECONFIG_BASE64 }}" ]; then
+            echo "${{ secrets.KUBECONFIG_BASE64 }}" | base64 -d > $HOME/.kube/config
+            chmod 600 $HOME/.kube/config
+            echo "decoded"
+          else
+            # Option B: if no secret, build embedded kubeconfig from host files (requires kubectl on runner)
+            if ! command -v kubectl >/dev/null 2>&1; then
+              echo "kubectl is required on the runner to build an embedded kubeconfig" >&2
+              exit 1
+            fi
+            kubectl config view --raw --flatten > /tmp/kube_embedded.yaml
+            # Detect a host IP reachable from containers and patch server if needed
+            HOST_IP=$(hostname -I | awk '{print $1}')
+            [ -z "$HOST_IP" ] && HOST_IP=$(cat /etc/resolv.conf | awk '/nameserver/ {print $2; exit}' || true)
+            # If HOST_IP detected, patch any localhost server entries to use HOST_IP preserving port
+            if [ -n "$HOST_IP" ]; then
+              perl -i -pe 's{(https?://)(?:[^:/]*)?(:[0-9]+)}{$1 . ENV{"HOST_IP"} . $3}ge' /tmp/kube_embedded.yaml
+            fi
+            mv /tmp/kube_embedded.yaml $HOME/.kube/config
+            chmod 600 $HOME/.kube/config
+            echo "built"
+          fi
+
+          # Diagnostics for logs
+          echo "--- kubeconfig server lines ---"
+          grep -n "server:" $HOME/.kube/config || true
+          echo "--- kubeconfig head ---"
+          sed -n '1,40p' $HOME/.kube/config
+
       - name: Install Dagger CLI
         run: |
           mkdir -p $HOME/.dagger/bin
           curl -L https://dl.dagger.io/dagger/install.sh | BIN_DIR=$HOME/.dagger/bin sh
           export PATH=$HOME/.dagger/bin:$PATH
           dagger version
-      
+
       - name: Run Dagger Chaos Pipeline
         working-directory: chaos-toolkit/dagger
-        run: |
-          # Install dependencies
-          go mod download
-          
-          # Run the chaos test
-           dagger call chaos-test \
-             --namespace="${{ inputs.namespace }}" \
-             --deployment="${{ inputs.deployment }}" \
-             --kubeconfig-dir="$HOME/.kube" \
-             --minikube-dir="$HOME/.minikube" \
-             --cleanup=${{ inputs.cleanup_after }}
         env:
           KUBECONFIG: ${{ env.HOME }}/.kube/config
-      
+        run: |
+          go mod download
+          dagger call chaos-test \
+            --namespace="${{ inputs.namespace }}" \
+            --deployment="${{ inputs.deployment }}" \
+            --kubeconfig-dir="$HOME/.kube" \
+            --cleanup=${{ inputs.cleanup_after }}
+
       - name: Upload Chaos Report
         if: always()
         uses: actions/upload-artifact@v4
@@ -105,7 +121,7 @@ jobs:
             chaos-toolkit/output/*.html
             chaos-toolkit/output/*.json
           retention-days: 30
-      
+
       - name: Comment PR with Results
         if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
@@ -114,22 +130,22 @@ jobs:
             const fs = require('fs');
             const summary = fs.readFileSync('chaos-toolkit/output/summary.json', 'utf8');
             const data = JSON.parse(summary);
-            
+
             const comment = `## 🧪 Chaos Test Results
-            
+
             **Target:** \`${{ inputs.deployment }}\` in \`${{ inputs.namespace }}\`
             **Chaos Type:** ${{ inputs.chaos_type }}
             **Duration:** ${{ inputs.chaos_duration }}s
-            
+
             ### Results
             - **Status:** ${data.passed ? '✅ PASSED' : '❌ FAILED'}
             - **Error Rate:** ${data.errorRate}%
             - **P99 Latency:** ${data.p99Latency}ms
             - **Recovery Time:** ${data.recoveryTime}s
-            
+
             📊 [Download Full Report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
             `;
-            
+
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
