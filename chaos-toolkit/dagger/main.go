@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"strconv"
-	"time"
 
 	dagger "dagger.io/dagger"
 )
@@ -37,7 +36,7 @@ func (c *ChaosToolkit) ChaosTest(
 ) error {
 	fmt.Printf("Running chaos test for deployment=%s, namespace=%s, chaos=%s\n", deployment, namespace, chaosType)
 
-	// Example: simulate chaos injection with pod-delete
+	// Example chaos injection command
 	chaosCmd := []string{"echo", "Simulating chaos: " + chaosType}
 	switch chaosType {
 	case "pod-delete":
@@ -52,7 +51,6 @@ func (c *ChaosToolkit) ChaosTest(
 		return fmt.Errorf("unknown chaos type: %s", chaosType)
 	}
 
-	// Run chaos in container
 	_, err := c.client.Container().
 		From("bitnami/kubectl:latest").
 		WithMountedDirectory("/kube", kubeconfigDir).
@@ -63,7 +61,7 @@ func (c *ChaosToolkit) ChaosTest(
 		return fmt.Errorf("failed chaos command: %w", err)
 	}
 
-	// k6 Load test
+	// k6 load test
 	k6Container := c.client.Container().From("loadimpact/k6:latest")
 	_, err = k6Container.WithExec([]string{
 		"k6", "run",
@@ -79,8 +77,6 @@ func (c *ChaosToolkit) ChaosTest(
 
 	if cleanup {
 		fmt.Println("Cleanup enabled - removing chaos artifacts")
-		// example: just echo for now
-		fmt.Println("Cleanup done")
 	}
 
 	return nil
@@ -89,7 +85,6 @@ func (c *ChaosToolkit) ChaosTest(
 func main() {
 	ctx := context.Background()
 
-	// Read environment/inputs
 	namespace := os.Getenv("INPUT_NAMESPACE")
 	if namespace == "" {
 		namespace = "default"
@@ -124,18 +119,16 @@ func main() {
 		cleanup = false
 	}
 
-	// Connect to Dagger
 	toolkit, err := NewChaosToolkit(ctx)
 	if err != nil {
 		log.Fatalf("Failed to create chaos toolkit: %v", err)
 	}
 	defer toolkit.client.Close()
 
-	// Mount directories
+	// Use only public dagger directories
 	kubeconfigDir := toolkit.client.Host().Directory(os.Getenv("HOME") + "/.kube")
 	minikubeDir := toolkit.client.Host().Directory(os.Getenv("HOME") + "/.minikube")
 
-	// Run the chaos test
 	if err := toolkit.ChaosTest(ctx, kubeconfigDir, minikubeDir, namespace, deployment, chaosType, chaosDuration, loadTestDuration, loadTestVUs, cleanup); err != nil {
 		log.Fatalf("Chaos test failed: %v", err)
 	}
