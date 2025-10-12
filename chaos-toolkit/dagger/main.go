@@ -3,7 +3,6 @@ package main
 import (
     "context"
     "fmt"
-    "log"
 
     "dagger/chaos-toolkit/internal/dagger"
 )
