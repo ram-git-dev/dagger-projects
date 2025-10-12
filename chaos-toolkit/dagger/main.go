@@ -132,20 +132,20 @@ func (m *ChaosToolkit) preflightChecks(
 }
 
 // kubectlContainer returns a container built via the Dagger client.
-// Adapt dagger.Connect usage if your SDK requires different signature.
+// It mounts the entire kubeconfig directory at /root/.kube so we avoid
+// assuming a single "config" file entry.
 func (m *ChaosToolkit) kubectlContainer(ctx context.Context, kubeconfigDir *dagger.Directory) (*dagger.Container, error) {
     client := dagger.Connect()
 
-    kubeconfigFile := kubeconfigDir.File("config")
-
     ctr := client.Container().
         From("alpine:latest").
-        WithExec([]string{"apk", "add", "--no-cache", "curl"}).
+        WithExec([]string{"apk", "add", "--no-cache", "curl", "bash"}).
         WithExec([]string{"sh", "-c", "curl -LO https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"}).
         WithExec([]string{"chmod", "+x", "./kubectl"}).
         WithExec([]string{"mv", "./kubectl", "/usr/local/bin/kubectl"}).
-        WithFile("/root/.kube/config", kubeconfigFile).
-        WithExec([]string{"chmod", "600", "/root/.kube/config"}).
+        // mount the entire directory at /root/.kube
+        WithDirectory("/root/.kube", kubeconfigDir).
+        WithExec([]string{"chmod", "-R", "600", "/root/.kube"}).
         WithEnvVariable("KUBECONFIG", "/root/.kube/config")
 
     return ctr, nil
