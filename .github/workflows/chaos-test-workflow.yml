@@ -67,37 +67,52 @@ jobs:
           if [ -n "${{ secrets.KUBECONFIG_BASE64 }}" ]; then
             echo "${{ secrets.KUBECONFIG_BASE64 }}" | base64 -d > $HOME/.kube/config
             chmod 600 $HOME/.kube/config
-            echo "decoded"
+            echo "decoded kubeconfig from secret"
           else
-            # Option B: build embedded kubeconfig from host files (requires kubectl on runner)
+            # Option B: build embedded kubeconfig from runner files (requires kubectl on runner)
             if ! command -v kubectl >/dev/null 2>&1; then
               echo "kubectl is required on the runner to build an embedded kubeconfig" >&2
               exit 1
             fi
             kubectl config view --raw --flatten > /tmp/kube_embedded.yaml
 
-            # Detect a host IP reachable from containers and patch server if needed
-            HOST_IP=$(hostname -I | awk '{print $1}')
-            [ -z "$HOST_IP" ] && HOST_IP=$(cat /etc/resolv.conf | awk '/nameserver/ {print $2; exit}' || true)
-
-            if [ -n "$HOST_IP" ]; then
-              perl -i -pe 's{(https?://)(?:[^:/]*)?(:[0-9]+)}{$1 . ENV{"HOST_IP"} . $3}ge' /tmp/kube_embedded.yaml
+            # Prefer the real minikube VM IP if available (minikube ip), otherwise try to detect host IP
+            MINIKUBE_IP=$(minikube ip 2>/dev/null || true)
+            if [ -n "$MINIKUBE_IP" ]; then
+              perl -0777 -i -pe 's{server:\s*\S+}{server: https://'"${MINIKUBE_IP}"':8443}g' /tmp/kube_embedded.yaml
+            else
+              HOST_IP=$(hostname -I | awk '{print $1}')
+              [ -z "$HOST_IP" ] && HOST_IP=$(cat /etc/resolv.conf | awk '/nameserver/ {print $2; exit}' || true)
+              if [ -n "$HOST_IP" ]; then
+                perl -i -pe 's{(https?://)(?:[^:/]*)?(:[0-9]+)}{$1 . ENV{"HOST_IP"} . $3}ge' /tmp/kube_embedded.yaml
+              fi
             fi
 
             mv /tmp/kube_embedded.yaml $HOME/.kube/config
             chmod 600 $HOME/.kube/config
-            echo "built"
+            echo "built embedded kubeconfig"
           fi
 
           # Fix potential inline YAML corruption where 'name:' landed on same line as 'server:'
-          # Ensures valid YAML like: server: https://host:port\n  name: minikube
           perl -0777 -i -pe 's{(server:\s*\S+)\s+name:}{\1\n  name:}g' $HOME/.kube/config || true
 
-          # Diagnostics for logs
-          echo "--- kubeconfig server lines ---"
-          grep -n "server:" $HOME/.kube/config || true
-          echo "--- kubeconfig head ---"
-          sed -n '1,40p' $HOME/.kube/config
+          # Diagnostics: show server and probe API from runner
+          echo "--- kubeconfig server ---"
+          kubectl --kubeconfig=$HOME/.kube/config config view -o jsonpath='{.clusters[0].cluster.server}'; echo
+          echo "--- quick API probe from runner ---"
+          SERVER=$(kubectl --kubeconfig=$HOME/.kube/config config view -o jsonpath='{.clusters[0].cluster.server}' | sed -e 's|https://||')
+          HOSTPART=${SERVER%/*}
+          host=$(echo "$HOSTPART" | sed -e 's|:.*||')
+          port=$(echo "$HOSTPART" | sed -e 's|.*:||')
+          curl -sSf --insecure "https://$host:$port/healthz" && echo "api ok" || echo "api probe failed (non-fatal)"
+
+      - name: Host preflight checks (run on runner)
+        run: |
+          set -euo pipefail
+          echo "Running preflight checks on runner host"
+          kubectl --kubeconfig=$HOME/.kube/config get namespace "${{ inputs.namespace }}"
+          kubectl --kubeconfig=$HOME/.kube/config get deployment "${{ inputs.deployment }}" -n "${{ inputs.namespace }}"
+          kubectl --kubeconfig=$HOME/.kube/config get nodes
 
       - name: Install Dagger CLI
         run: |
@@ -105,12 +120,6 @@ jobs:
           curl -L https://dl.dagger.io/dagger/install.sh | BIN_DIR=$HOME/.dagger/bin sh
           export PATH=$HOME/.dagger/bin:$PATH
           dagger version
-
-      - name: Test kubectl (sanity check)
-        run: |
-          # quick checks to fail early if kubeconfig is invalid or server unreachable
-          kubectl --kubeconfig=$HOME/.kube/config cluster-info || true
-          kubectl --kubeconfig=$HOME/.kube/config get nodes || true
 
       - name: Run Dagger Chaos Pipeline
         working-directory: chaos-toolkit/dagger
