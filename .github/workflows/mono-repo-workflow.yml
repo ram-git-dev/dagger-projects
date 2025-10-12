@@ -1,4 +1,4 @@
-name: Build changed services
+name: mono-repo-build
 
 on:
   push:
