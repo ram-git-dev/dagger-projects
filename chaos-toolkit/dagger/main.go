@@ -3,44 +3,32 @@ package main
 import (
     "context"
     "fmt"
+    "os"
+    "strings"
 
     "dagger/chaos-toolkit/internal/dagger"
+    "dagger.io/dagger"
 )
 
-// ChaosToolkit is the exported receiver used by the Dagger module.
 type ChaosToolkit struct{}
 
-// Hello returns a greeting message
 func (m *ChaosToolkit) Hello(ctx context.Context) string {
     return "Hello from Chaos Toolkit!"
 }
 
-// ChaosTest runs a complete chaos engineering test
-// Parameter names become CLI flags (kebab-case).
 func (m *ChaosToolkit) ChaosTest(
     ctx context.Context,
     namespace string,
     deployment string,
     kubeconfigDir *dagger.Directory,
-    // +optional
     minikubeDir *dagger.Directory,
-    // +optional
-    // +default="pod-delete"
     chaosType string,
-    // +optional
-    // +default="60"
     chaosDuration string,
-    // +optional
-    // +default="5m"
     loadTestDuration string,
-    // +optional
-    // +default="10"
     loadTestVus string,
-    // cleanup flag to match workflow --cleanup
     cleanup bool,
 ) (string, error) {
 
-    // prefer minikubeDir when provided
     if minikubeDir != nil {
         kubeconfigDir = minikubeDir
     }
@@ -52,9 +40,8 @@ func (m *ChaosToolkit) ChaosTest(
     fmt.Printf("Load Test: %s VUs for %s\n", loadTestVus, loadTestDuration)
     fmt.Printf("Cleanup after test: %v\n", cleanup)
 
-    // Phase 1: Pre-flight checks
     fmt.Println("\n📋 Phase 1: Pre-flight Checks")
-    kubectl, err := m.kubectlContainer(ctx, kubeconfigDir)
+    kubectl, err := m.kubectlContainer(ctx)
     if err != nil {
         return "", fmt.Errorf("failed to prepare kubectl container: %w", err)
     }
@@ -64,7 +51,6 @@ func (m *ChaosToolkit) ChaosTest(
     }
     fmt.Println("✅ Pre-flight checks passed!")
 
-    // TODO: implement operators, chaos injection, load test, reporting
     fmt.Println("\n📦 Phase 2: Installing Operators - TODO")
     fmt.Println("\n📊 Phase 3: Baseline Test - TODO")
     fmt.Println("\n💥 Phase 4: Chaos Injection - TODO")
@@ -95,30 +81,24 @@ func (m *ChaosToolkit) preflightChecks(
 ) error {
 
     fmt.Printf("  → Checking namespace '%s'...\n", namespace)
-    _, err := kubectl.
-        WithExec([]string{"kubectl", "get", "namespace", namespace}).
-        Sync(ctx)
+    _, err := kubectl.WithExec([]string{"kubectl", "get", "namespace", namespace}).Sync(ctx)
     if err != nil {
         return fmt.Errorf("namespace '%s' not found: %w", namespace, err)
     }
     fmt.Println("    ✓ Namespace exists")
 
     fmt.Printf("  → Checking deployment '%s'...\n", deployment)
-    _, err = kubectl.
-        WithExec([]string{"kubectl", "get", "deployment", deployment, "-n", namespace}).
-        Sync(ctx)
+    _, err = kubectl.WithExec([]string{"kubectl", "get", "deployment", deployment, "-n", namespace}).Sync(ctx)
     if err != nil {
         return fmt.Errorf("deployment '%s' not found in namespace '%s': %w", deployment, namespace, err)
     }
     fmt.Println("    ✓ Deployment exists")
 
     fmt.Println("  → Checking deployment status...")
-    statusOutput, err := kubectl.
-        WithExec([]string{
-            "kubectl", "get", "deployment", deployment, "-n", namespace,
-            "-o", "jsonpath={.status.readyReplicas}/{.status.replicas}",
-        }).
-        Stdout(ctx)
+    statusOutput, err := kubectl.WithExec([]string{
+        "kubectl", "get", "deployment", deployment, "-n", namespace,
+        "-o", "jsonpath={.status.readyReplicas}/{.status.replicas}",
+    }).Stdout(ctx)
     if err != nil {
         return fmt.Errorf("failed to get deployment status: %w", err)
     }
@@ -127,16 +107,24 @@ func (m *ChaosToolkit) preflightChecks(
     return nil
 }
 
-func (m *ChaosToolkit) kubectlContainer(ctx context.Context, kubeconfigDir *dagger.Directory) (*dagger.Container, error) {
-    client := dagger.Connect()
+func (m *ChaosToolkit) kubectlContainer(ctx context.Context) (*dagger.Container, error) {
+    client, err := dagger.Connect(ctx, dagger.WithLogOutput(os.Stderr))
+    if err != nil {
+        return nil, fmt.Errorf("failed to connect to Dagger: %w", err)
+    }
 
-    // Read service account files from host
-    token := client.Host().File("/var/run/secrets/kubernetes.io/serviceaccount/token")
-    ca := client.Host().File("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
-    ns := client.Host().File("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+    saDir := client.Host().Directory("/var/run/secrets/kubernetes.io/serviceaccount")
 
-    // Build kubeconfig YAML string
-    kubeconfig := client.Directory().WithNewFile("config", `
+    token, err := saDir.File("token").Contents(ctx)
+    if err != nil {
+        return nil, fmt.Errorf("failed to read token: %w", err)
+    }
+    namespace, err := saDir.File("namespace").Contents(ctx)
+    if err != nil {
+        return nil, fmt.Errorf("failed to read namespace: %w", err)
+    }
+
+    kubeconfigYAML := fmt.Sprintf(`
 apiVersion: v1
 kind: Config
 clusters:
@@ -149,15 +137,16 @@ contexts:
   context:
     cluster: in-cluster
     user: in-cluster
-    namespace: ` + ns.Contents(ctx) + `
+    namespace: %s
 current-context: in-cluster
 users:
 - name: in-cluster
   user:
-    token: ` + token.Contents(ctx) + `
-`)
+    token: %s
+`, strings.TrimSpace(namespace), strings.TrimSpace(token))
 
-    // Build container with kubectl and mounted kubeconfig
+    kubeconfigDir := client.Directory().WithNewFile("config", kubeconfigYAML)
+
     ctr := client.Container().
         From("alpine:latest").
         WithExec([]string{"apk", "add", "--no-cache", "curl", "bash"}).
@@ -166,8 +155,8 @@ curl -LO https://dl.k8s.io/release/$(curl -sL https://dl.k8s.io/release/stable.t
 chmod +x kubectl &&
 mv kubectl /usr/local/bin/kubectl
 `}).
-        WithDirectory("/root/.kube", kubeconfig).
-        WithFile("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt", ca).
+        WithDirectory("/root/.kube", kubeconfigDir).
+        WithFile("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt", saDir.File("ca.crt")).
         WithEnvVariable("KUBECONFIG", "/root/.kube/config")
 
     return ctr, nil
