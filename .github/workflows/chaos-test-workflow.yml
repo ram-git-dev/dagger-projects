@@ -79,8 +79,10 @@ jobs:
         run: |
           mkdir -p $HOME/.dagger/bin
           curl -L https://dl.dagger.io/dagger/install.sh | BIN_DIR=$HOME/.dagger/bin sh
-          export PATH=$HOME/.dagger/bin:$PATH
-          dagger version
+          echo "$HOME/.dagger/bin" >> $GITHUB_PATH
+
+      - name: Verify Dagger CLI
+        run: dagger version
 
       - name: Run Dagger Chaos Pipeline
         working-directory: chaos-toolkit/dagger
