@@ -6,8 +6,8 @@ import (
     "os"
     "strings"
 
-    "dagger/chaos-toolkit/internal/dagger"
-    "dagger.io/dagger"
+    internal "dagger/chaos-toolkit/internal/dagger"
+    dg "dagger.io/dagger"
 )
 
 type ChaosToolkit struct{}
@@ -20,8 +20,8 @@ func (m *ChaosToolkit) ChaosTest(
     ctx context.Context,
     namespace string,
     deployment string,
-    kubeconfigDir *dagger.Directory,
-    minikubeDir *dagger.Directory,
+    kubeconfigDir *dg.Directory,
+    minikubeDir *dg.Directory,
     chaosType string,
     chaosDuration string,
     loadTestDuration string,
@@ -75,7 +75,7 @@ Next: Implement chaos injection, load testing, and reporting
 
 func (m *ChaosToolkit) preflightChecks(
     ctx context.Context,
-    kubectl *dagger.Container,
+    kubectl *dg.Container,
     namespace string,
     deployment string,
 ) error {
@@ -107,11 +107,8 @@ func (m *ChaosToolkit) preflightChecks(
     return nil
 }
 
-func (m *ChaosToolkit) kubectlContainer(ctx context.Context) (*dagger.Container, error) {
-    client, err := dagger.Connect(ctx, dagger.WithLogOutput(os.Stderr))
-    if err != nil {
-        return nil, fmt.Errorf("failed to connect to Dagger: %w", err)
-    }
+func (m *ChaosToolkit) kubectlContainer(ctx context.Context) (*dg.Container, error) {
+    client := dg.Connect(ctx)
 
     saDir := client.Host().Directory("/var/run/secrets/kubernetes.io/serviceaccount")
 
