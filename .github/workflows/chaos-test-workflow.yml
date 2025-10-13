@@ -57,11 +57,15 @@ jobs:
         with:
           go-version: '1.21'
 
-      - name: Install kubectl
+      - name: Install kubectl (non-root)
         run: |
-          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-          chmod +x kubectl
-          mv kubectl /usr/local/bin/
+          mkdir -p $HOME/bin
+          curl -Lo $HOME/bin/kubectl "https://dl.k8s.io/release/$(curl -sL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x $HOME/bin/kubectl
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+      - name: Verify kubectl
+        run: kubectl version --client
 
       - name: Preflight checks (in-cluster)
         run: |
