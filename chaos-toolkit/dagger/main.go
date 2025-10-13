@@ -3,9 +3,7 @@ package main
 import (
     "context"
     "fmt"
-    "strings"   
-
-    chaosdagger "dagger/chaos-toolkit/internal/chaosdagger"
+    "strings"
 
     dg "dagger.io/dagger"
 )
