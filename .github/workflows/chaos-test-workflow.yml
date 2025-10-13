@@ -46,7 +46,7 @@ on:
 
 jobs:
   chaos-test:
-    runs-on: [self-hosted, chaos-runner]
+    runs-on: [self-hosted, minikube, chaos-toolkit, chaos-runner]
 
     steps:
       - name: Checkout code
@@ -57,12 +57,13 @@ jobs:
         with:
           go-version: '1.21'
 
-      - name: Use in-cluster kubeconfig
+      - name: Install kubectl
         run: |
-          echo "Using in-cluster config"
-          export KUBECONFIG=/var/run/secrets/kubernetes.io/serviceaccount/token
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          mv kubectl /usr/local/bin/
 
-      - name: Host preflight checks (run in-cluster)
+      - name: Preflight checks (in-cluster)
         run: |
           set -euo pipefail
           echo "Running preflight checks inside cluster"
