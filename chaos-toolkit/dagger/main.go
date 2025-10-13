@@ -3,10 +3,8 @@ package main
 import (
     "context"
     "fmt"
-    "os"
     "strings"
 
-    internal "dagger/chaos-toolkit/internal/dagger"
     dg "dagger.io/dagger"
 )
 
@@ -108,7 +106,10 @@ func (m *ChaosToolkit) preflightChecks(
 }
 
 func (m *ChaosToolkit) kubectlContainer(ctx context.Context) (*dg.Container, error) {
-    client := dg.Connect(ctx)
+    client, err := dg.Connect(ctx)
+    if err != nil {
+        return nil, fmt.Errorf("failed to connect to Dagger: %w", err)
+    }
 
     saDir := client.Host().Directory("/var/run/secrets/kubernetes.io/serviceaccount")
 
